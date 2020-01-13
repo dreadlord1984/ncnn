@@ -17,186 +17,100 @@
 #if __ARM_NEON
 #include <arm_neon.h>
 #endif // __ARM_NEON
+#include <math.h>
 
 #include "cpu.h"
+
+#include "layer_type.h"
+#include "layer.h"
+
+#if NCNN_VULKAN
+#if __ANDROID_API__ >= 26
+#include <android/hardware_buffer.h>
+#endif // __ANDROID_API__ >= 26
+#endif // NCNN_VULKAN
 
 namespace ncnn {
 
 void Mat::substract_mean_normalize(const float* mean_vals, const float* norm_vals)
 {
-    int size = w * h;
+    Layer* op;
 
     if (mean_vals && !norm_vals)
     {
         // substract mean only
-        #pragma omp parallel for
+        op = create_layer(LayerType::Bias);
+
+        ParamDict pd;
+        pd.set(0, c);
+
+        op->load_param(pd);
+
+        Mat weights[1];
+        weights[0] = Mat(c);
         for (int q=0; q<c; q++)
         {
-            float* ptr = data + cstep * q;
-            const float mean = mean_vals[q];
-
-#if __ARM_NEON
-            int nn = size >> 2;
-            int remain = size - (nn << 2);
-#else
-            int remain = size;
-#endif // __ARM_NEON
-
-#if __ARM_NEON
-#if __aarch64__
-            float32x4_t _mean = vdupq_n_f32(mean);
-            for (; nn>0; nn--)
-            {
-                float32x4_t _ptr = vld1q_f32(ptr);
-                _ptr = vsubq_f32(_ptr, _mean);
-                vst1q_f32(ptr, _ptr);
-                ptr += 4;
-            }
-#else
-            if (nn > 0)
-            {
-            asm volatile(
-                "vdup.f32   q1, %4              \n"
-                "0:                             \n"
-                "pld        [%1, #128]          \n"
-                "vld1.f32   {d0-d1}, [%1 :128]  \n"
-                "vsub.f32   q0, q0, q1          \n"
-                "subs       %0, #1              \n"
-                "vst1.f32   {d0-d1}, [%1 :128]! \n"
-                "bne        0b                  \n"
-                : "=r"(nn),     // %0
-                  "=r"(ptr)     // %1
-                : "0"(nn),
-                  "1"(ptr),
-                  "r"(mean)     // %4
-                : "cc", "memory", "q0", "q1"
-            );
-            }
-#endif // __aarch64__
-#endif // __ARM_NEON
-            for (; remain>0; remain--)
-            {
-                *ptr -= mean;
-                ptr++;
-            }
+            weights[0][q] = -mean_vals[q];
         }
+
+        op->load_model(ModelBinFromMatArray(weights));
     }
     else if (!mean_vals && norm_vals)
     {
         // normalize only
-        #pragma omp parallel for
+        op = create_layer(LayerType::Scale);
+
+        ParamDict pd;
+        pd.set(0, c);
+
+        op->load_param(pd);
+
+        Mat weights[1];
+        weights[0] = Mat(c);
         for (int q=0; q<c; q++)
         {
-            float* ptr = data + cstep * q;
-            const float norm = norm_vals[q];
-
-#if __ARM_NEON
-            int nn = size >> 2;
-            int remain = size - (nn << 2);
-#else
-            int remain = size;
-#endif // __ARM_NEON
-
-#if __ARM_NEON
-#if __aarch64__
-            float32x4_t _norm = vdupq_n_f32(norm);
-            for (; nn>0; nn--)
-            {
-                float32x4_t _ptr = vld1q_f32(ptr);
-                _ptr = vmulq_f32(_ptr, _norm);
-                vst1q_f32(ptr, _ptr);
-                ptr += 4;
-            }
-#else
-            if (nn > 0)
-            {
-            asm volatile(
-                "vdup.f32   q1, %4              \n"
-                "0:                             \n"
-                "pld        [%1, #128]          \n"
-                "vld1.f32   {d0-d1}, [%1 :128]  \n"
-                "vmul.f32   q0, q0, q1          \n"
-                "subs       %0, #1              \n"
-                "vst1.f32   {d0-d1}, [%1 :128]! \n"
-                "bne        0b                  \n"
-                : "=r"(nn),     // %0
-                  "=r"(ptr)     // %1
-                : "0"(nn),
-                  "1"(ptr),
-                  "r"(norm)     // %4
-                : "cc", "memory", "q0", "q1"
-            );
-            }
-#endif // __aarch64__
-#endif // __ARM_NEON
-            for (; remain>0; remain--)
-            {
-                *ptr *= norm;
-                ptr++;
-            }
+            weights[0][q] = norm_vals[q];
         }
+
+        op->load_model(ModelBinFromMatArray(weights));
     }
     else if (mean_vals && norm_vals)
     {
         // substract mean and normalize
-        #pragma omp parallel for
+        op = create_layer(LayerType::Scale);
+
+        ParamDict pd;
+        pd.set(0, c);
+        pd.set(1, 1);
+
+        op->load_param(pd);
+
+        Mat weights[2];
+        weights[0] = Mat(c);
+        weights[1] = Mat(c);
         for (int q=0; q<c; q++)
         {
-            float* ptr = data + cstep * q;
-            const float mean = mean_vals[q];
-            const float norm = norm_vals[q];
-
-#if __ARM_NEON
-            int nn = size >> 2;
-            int remain = size - (nn << 2);
-#else
-            int remain = size;
-#endif // __ARM_NEON
-
-#if __ARM_NEON
-#if __aarch64__
-            float32x4_t _mean = vdupq_n_f32(mean);
-            float32x4_t _norm = vdupq_n_f32(norm);
-            for (; nn>0; nn--)
-            {
-                float32x4_t _ptr = vld1q_f32(ptr);
-                _ptr = vsubq_f32(_ptr, _mean);
-                _ptr = vmulq_f32(_ptr, _norm);
-                vst1q_f32(ptr, _ptr);
-                ptr += 4;
-            }
-#else
-            if (nn > 0)
-            {
-            asm volatile(
-                "vdup.f32   q1, %4              \n"
-                "vdup.f32   q2, %5              \n"
-                "0:                             \n"
-                "pld        [%1, #128]          \n"
-                "vld1.f32   {d0-d1}, [%1 :128]  \n"
-                "vsub.f32   q0, q0, q1          \n"
-                "vmul.f32   q0, q0, q2          \n"
-                "subs       %0, #1              \n"
-                "vst1.f32   {d0-d1}, [%1 :128]! \n"
-                "bne        0b                  \n"
-                : "=r"(nn),     // %0
-                  "=r"(ptr)     // %1
-                : "0"(nn),
-                  "1"(ptr),
-                  "r"(mean),    // %4
-                  "r"(norm)     // %5
-                : "cc", "memory", "q0", "q1", "q2"
-            );
-            }
-#endif // __aarch64__
-#endif // __ARM_NEON
-            for (; remain>0; remain--)
-            {
-                *ptr = (*ptr - mean) * norm;
-                ptr++;
-            }
+            weights[0][q] = norm_vals[q];
+            weights[1][q] = - mean_vals[q] * norm_vals[q];
         }
+
+        op->load_model(ModelBinFromMatArray(weights));
     }
+    else // if (!mean_vals && !norm_vals)
+    {
+        return;
+    }
+
+    Option opt;
+    opt.num_threads = 1;// TODO
+
+    op->create_pipeline(opt);
+
+    op->forward_inplace(*this, opt);
+
+    op->destroy_pipeline(opt);
+
+    delete op;
 }
 
 // convert half precision floating point to float
@@ -257,7 +171,7 @@ Mat Mat::from_float16(const unsigned short* data, int size)
     if (m.empty())
         return m;
 
-    float* ptr = m.data;
+    float* ptr = m;//.data;
 
 #if __ARM_NEON && (__ARM_FP & 2)
     int nn = cpu_support_arm_vfpv4() ? size >> 2 : 0;
@@ -272,10 +186,10 @@ Mat Mat::from_float16(const unsigned short* data, int size)
     {
     asm volatile(
         "0:                             \n"
-        "ldr    d0, [%1], #8            \n"
+        "ld1    {v0.4h}, [%1], #8       \n"
         "fcvtl  v1.4s, v0.4h            \n"
         "subs   %w0, %w0, #1            \n"
-        "str    q1, [%2], #16           \n"
+        "st1    {v1.4s}, [%2], #16      \n"
         "bne    0b                      \n"
         : "=r"(nn),     // %0
           "=r"(data),   // %1
@@ -319,202 +233,241 @@ Mat Mat::from_float16(const unsigned short* data, int size)
     return m;
 }
 
-static void copy_make_border_image(const Mat& src, Mat& dst, int top, int left, int type, float v)
+#if NCNN_VULKAN
+#if __ANDROID_API__ >= 26
+VkImageMat VkImageMat::from_android_hardware_buffer(AHardwareBuffer* hb, VkAndroidHardwareBufferImageAllocator* allocator)
 {
-    int w = dst.w;
-    int h = dst.h;
+    AHardwareBuffer_Desc bufferDesc;
+    AHardwareBuffer_describe(hb, &bufferDesc);
 
-    const float* ptr = src.data;
-    float* outptr = dst.data;
+    VkImageMat m;
 
-    if (type == BORDER_CONSTANT)
-    {
-        int y = 0;
-        // fill top
-        for (; y < top; y++)
-        {
-            int x = 0;
-            for (; x < w; x++)
-            {
-                outptr[x] = v;
-            }
-            outptr += w;
-        }
-        // fill center
-        for (; y < (top + src.h); y++)
-        {
-            int x = 0;
-            for (; x < left; x++)
-            {
-                outptr[x] = v;
-            }
-            for (; x < (left + src.w); x++)
-            {
-                outptr[x] = ptr[x - left];
-            }
-            for (; x < w; x++)
-            {
-                outptr[x] = v;
-            }
-            ptr += src.w;
-            outptr += w;
-        }
-        // fill bottom
-        for (; y < h; y++)
-        {
-            int x = 0;
-            for (; x < w; x++)
-            {
-                outptr[x] = v;
-            }
-            outptr += w;
-        }
-    }
-    else if (type == BORDER_REPLICATE)
-    {
-        int y = 0;
-        // fill top
-        for (; y < top; y++)
-        {
-            int x = 0;
-            for (; x < left; x++)
-            {
-                outptr[x] = ptr[0];
-            }
-            for (; x < (left + src.w); x++)
-            {
-                outptr[x] = ptr[x - left];
-            }
-            for (; x < w; x++)
-            {
-                outptr[x] = ptr[src.w - 1];
-            }
-            outptr += w;
-        }
-        // fill center
-        for (; y < (top + src.h); y++)
-        {
-            int x = 0;
-            for (; x < left; x++)
-            {
-                outptr[x] = ptr[0];
-            }
-            for (; x < (left + src.w); x++)
-            {
-                outptr[x] = ptr[x - left];
-            }
-            for (; x < w; x++)
-            {
-                outptr[x] = ptr[src.w - 1];
-            }
-            ptr += src.w;
-            outptr += w;
-        }
-        // fill bottom
-        ptr -= src.w;
-        for (; y < h; y++)
-        {
-            int x = 0;
-            for (; x < left; x++)
-            {
-                outptr[x] = ptr[0];
-            }
-            for (; x < (left + src.w); x++)
-            {
-                outptr[x] = ptr[x - left];
-            }
-            for (; x < w; x++)
-            {
-                outptr[x] = ptr[src.w - 1];
-            }
-            outptr += w;
-        }
-    }
+    m.allocator = allocator;
+
+    m.width = bufferDesc.width;
+    m.height = bufferDesc.height;
+    m.format = VK_FORMAT_UNDEFINED;
+
+    m.data = allocator->fastMalloc(hb);
+
+    m.refcount = (int*)((unsigned char*)m.data + offsetof(VkImageMemory, refcount));
+    *m.refcount = 1;
+
+    return m;
+}
+#endif // __ANDROID_API__ >= 26
+#endif // NCNN_VULKAN
+
+void copy_make_border(const Mat& src, Mat& dst, int top, int bottom, int left, int right, int type, float v, const Option& opt)
+{
+    Layer* padding = create_layer(LayerType::Padding);
+
+    ParamDict pd;
+    pd.set(0, top);
+    pd.set(1, bottom);
+    pd.set(2, left);
+    pd.set(3, right);
+    pd.set(4, type);
+    pd.set(5, v);
+
+    padding->load_param(pd);
+
+    padding->create_pipeline(opt);
+
+    padding->forward(src, dst, opt);
+
+    padding->destroy_pipeline(opt);
+
+    delete padding;
 }
 
-void copy_make_border(const Mat& src, Mat& dst, int top, int bottom, int left, int right, int type, float v)
+void copy_cut_border(const Mat& src, Mat& dst, int top, int bottom, int left, int right, const Option& opt)
 {
-    int w = src.w + left + right;
-    int h = src.h + top + bottom;
+    Layer* crop = create_layer(LayerType::Crop);
 
-    if (src.dims == 2)
-    {
-        dst.create(w, h);
-        if (dst.empty())
-            return;
+    ParamDict pd;
+    pd.set(0, left);
+    pd.set(1, top);
+    pd.set(2, 0);
+    pd.set(3, src.w - left - right);
+    pd.set(4, src.h - top - bottom);
+    pd.set(5, -233);
 
-        copy_make_border_image(src, dst, top, left, type, v);
-    }
-    else if (src.dims == 3)
-    {
-        int channels = src.c;
+    crop->load_param(pd);
 
-        dst.create(w, h, channels);
-        if (dst.empty())
-            return;
+    crop->create_pipeline(opt);
 
-        // unroll image channel
-        #pragma omp parallel for
-        for (int q=0; q<channels; q++)
-        {
-            const Mat m = src.channel(q);
-            Mat borderm = dst.channel(q);
+    crop->forward(src, dst, opt);
 
-            copy_make_border_image(m, borderm, top, left, type, v);
-        }
-    }
+    crop->destroy_pipeline(opt);
+
+    delete crop;
 }
 
-static void copy_cut_border_image(const Mat& src, Mat& dst, int top, int left)
+void resize_bilinear(const Mat& src, Mat& dst, int w, int h, const Option& opt)
 {
-    int w = dst.w;
-    int h = dst.h;
+    Layer* interp = create_layer(LayerType::Interp);
 
-    const float* ptr = src.data + src.w * top + left;
-    float* outptr = dst.data;
+    ParamDict pd;
+    pd.set(0, 2);
+    pd.set(3, h);
+    pd.set(4, w);
 
-    for (int y = 0; y < h; y++)
-    {
-        for (int x = 0; x < w; x++)
-        {
-            outptr[x] = ptr[x];
-        }
-        outptr += w;
-        ptr += src.w;
-    }
+    interp->load_param(pd);
+
+    interp->create_pipeline(opt);
+
+    interp->forward(src, dst, opt);
+
+    interp->destroy_pipeline(opt);
+
+    delete interp;
 }
 
-void copy_cut_border(const Mat& src, Mat& dst, int top, int bottom, int left, int right)
+void resize_bicubic(const Mat& src, Mat& dst, int w, int h, const Option& opt)
 {
-    int w = src.w - left - right;
-    int h = src.h - top - bottom;
+    Layer* interp = create_layer(LayerType::Interp);
 
-    if (src.dims == 2)
-    {
-        dst.create(w, h);
-        if (dst.empty())
-            return;
+    ParamDict pd;
+    pd.set(0, 3);
+    pd.set(3, h);
+    pd.set(4, w);
 
-        copy_cut_border_image(src, dst, top, left);
-    }
-    else if (src.dims == 3)
-    {
-        int channels = src.c;
+    interp->load_param(pd);
 
-        dst.create(w, h, channels);
-        if (dst.empty())
-            return;
+    interp->create_pipeline(opt);
 
-        // unroll image channel
-        #pragma omp parallel for
-        for (int q=0; q<channels; q++)
-        {
-            const Mat m = src.channel(q);
-            Mat cutm = dst.channel(q);
+    interp->forward(src, dst, opt);
 
-            copy_cut_border_image(m, cutm, top, left);
-        }
-    }
+    interp->destroy_pipeline(opt);
+
+    delete interp;
+}
+
+void convert_packing(const Mat& src, Mat& dst, int _elempack, const Option& opt)
+{
+    Layer* packing = create_layer(LayerType::Packing);
+
+    ParamDict pd;
+    pd.set(0, _elempack);
+
+    packing->load_param(pd);
+
+    packing->create_pipeline(opt);
+
+    packing->forward(src, dst, opt);
+
+    packing->destroy_pipeline(opt);
+
+    delete packing;
+}
+
+void cast_float32_to_float16(const Mat& src, Mat& dst, const Option& opt)
+{
+    Layer* cast = create_layer(LayerType::Cast);
+
+    ParamDict pd;
+    pd.set(0, 1);
+    pd.set(1, 2);
+
+    cast->load_param(pd);
+
+    cast->create_pipeline(opt);
+
+    cast->forward(src, dst, opt);
+
+    cast->destroy_pipeline(opt);
+
+    delete cast;
+}
+
+void cast_float16_to_float32(const Mat& src, Mat& dst, const Option& opt)
+{
+    Layer* cast = create_layer(LayerType::Cast);
+
+    ParamDict pd;
+    pd.set(0, 2);
+    pd.set(1, 1);
+
+    cast->load_param(pd);
+
+    cast->create_pipeline(opt);
+
+    cast->forward(src, dst, opt);
+
+    cast->destroy_pipeline(opt);
+
+    delete cast;
+}
+
+void quantize_float32_to_int8(const Mat& src, Mat& dst, float scale, const Option& opt)
+{
+    Layer* quantize = create_layer(LayerType::Quantize);
+
+    ParamDict pd;
+    pd.set(0, scale);
+
+    quantize->load_param(pd);
+
+    quantize->create_pipeline(opt);
+
+    quantize->forward(src, dst, opt);
+
+    quantize->destroy_pipeline(opt);
+
+    delete quantize;
+}
+
+void dequantize_int32_to_float32(Mat& m, float scale, const float* bias, int bias_data_size, const Option& opt)
+{
+    Layer* dequantize = create_layer(LayerType::Dequantize);
+
+    ParamDict pd;
+    pd.set(0, scale);
+    pd.set(1, bias ? 1 : 0);
+    pd.set(2, bias_data_size);
+
+    dequantize->load_param(pd);
+
+    Mat weights[1];
+    weights[0] = Mat(bias_data_size, (void*)bias);
+
+    dequantize->load_model(ModelBinFromMatArray(weights));
+
+    dequantize->create_pipeline(opt);
+
+    dequantize->forward_inplace(m, opt);
+
+    dequantize->destroy_pipeline(opt);
+
+    delete dequantize;
+}
+
+void requantize_int8_to_int8(const Mat& src, Mat& dst, float scale_in, float scale_out, const float* bias, int bias_data_size, int fusion_relu, const Option& opt)
+{
+    Layer* requantize = create_layer(LayerType::Requantize);
+
+    ParamDict pd;
+    pd.set(0, scale_in);
+    pd.set(1, scale_out);
+    pd.set(2, bias ? 1 : 0);
+    pd.set(3, bias_data_size);
+    pd.set(4, fusion_relu);
+
+    requantize->load_param(pd);
+
+    Mat weights[1];
+    weights[0] = Mat(bias_data_size, (void*)bias);
+
+    requantize->load_model(ModelBinFromMatArray(weights));
+
+    requantize->create_pipeline(opt);
+
+    requantize->forward(src, dst, opt);
+
+    requantize->destroy_pipeline(opt);
+
+    delete requantize;
 }
 
 } // namespace ncnn
